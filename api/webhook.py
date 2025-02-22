@@ -1,4 +1,4 @@
-from telegram import Update, ForceReply
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -6,81 +6,66 @@ from telegram.ext import (
     MessageHandler,
     filters
 )
-import json
+from aiohttp import web
 import os
-from http.server import BaseHTTPRequestHandler
+import json
 
-# Your bot token from BotFather
+# Get token from environment variables
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
-# Initialize bot application
-application = Application.builder().token(TOKEN).build()
+# Initialize bot
+app = Application.builder().token(TOKEN).build()
 
-# Command handlers
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send a message when the command /start is issued."""
+# ----- Command Handlers -----
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command"""
     user = update.effective_user
     await update.message.reply_html(
-        f"Hi {user.mention_html()}! 👋\nI'm your bot. Use /help to see available commands.",
-        reply_markup=ForceReply(selective=True),
+        f"👋 Hello {user.mention_html()}!\n"
+        "I'm your Vercel-hosted bot!\n"
+        "Try /help for commands"
     )
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send a message when the command /help is issued."""
+async def help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /help command"""
     help_text = """
-Available commands:
-/start - Start the bot
-/help - Show this help message
-/ping - Check if bot is alive
+🛠 Available Commands:
+/start - Start conversation
+/help - Show this help
+/ping - Check bot latency
+/echo - Reply with your message
     """
     await update.message.reply_text(help_text)
 
-async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Response to /ping command"""
-    await update.message.reply_text("Pong! 🏓")
+async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /ping command"""
+    await update.message.reply_text("🏓 Pong!")
 
 async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Echo the user message."""
-    await update.message.reply_text(f"You said: {update.message.text}")
+    """Echo user's text message"""
+    await update.message.reply_text(f"📢 You said: {update.message.text}")
 
-# Register handlers
-application.add_handler(CommandHandler("start", start_command))
-application.add_handler(CommandHandler("help", help_command))
-application.add_handler(CommandHandler("ping", ping_command))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+# ----- Setup Handlers -----
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("help", help))
+app.add_handler(CommandHandler("ping", ping))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
 
-# Vercel serverless function handler
-async def handle_webhook(update_data):
+# ----- Vercel Serverless Handler -----
+async def vercel_handler(request):
     try:
-        update = Update.de_json(update_data, application.bot)
-        await application.process_update(update)
-        return {"statusCode": 200, "body": "OK"}
+        # Parse Telegram update
+        data = await request.json()
+        update = Update.de_json(data, app.bot)
+        
+        # Process update
+        await app.process_update(update)
+        return web.Response(text="OK", status=200)
+    
     except Exception as e:
-        print(f"Error processing update: {e}")
-        return {"statusCode": 500, "body": "Error processing update"}
+        print(f"⚠️ Error: {str(e)}")
+        return web.Response(text="Error", status=500)
 
-class handler(BaseHTTPRequestHandler):
-    async def do_POST(self):
-        try:
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-            update_data = json.loads(post_data.decode())
-            
-            result = await handle_webhook(update_data)
-            
-            self.send_response(result["statusCode"])
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            self.wfile.write(result["body"].encode())
-        except Exception as e:
-            print(f"Error in webhook handler: {e}")
-            self.send_response(500)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-            self.wfile.write("Internal server error".encode())
-
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
-        self.end_headers()
-        self.wfile.write("Bot webhook is running!".encode())
+# Vercel requires this named export
+async def main(request):
+    return await vercel_handler(request)
